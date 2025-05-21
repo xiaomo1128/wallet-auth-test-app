@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
-import { SiweMessage } from "siwe";
 import { useAccount, useSignMessage, useDisconnect } from "wagmi";
 import axios from "axios";
 import { jwtDecode } from "jwt-decode";
@@ -65,29 +64,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(false);
   }, []);
 
-  // 创建并签名SIWE消息
-  const createSiweMessage = async (address: string, statement: string) => {
-    const domain = window.location.host;
-    const origin = window.location.origin;
-
-    const message = new SiweMessage({
-      domain,
-      address,
-      statement,
-      uri: origin,
-      version: "1",
-      chainId: 1, // 根据您的需求更改
-      nonce: await fetchNonce(),
-      issuedAt: new Date().toISOString(),
-    });
-
-    return message.prepareMessage();
-  };
-
   // 从后端获取nonce
   const fetchNonce = async () => {
     const response = await axios.get("http://localhost:3001/auth/nonce");
     return response.data.nonce;
+  };
+
+  // 完全自定义的消息创建函数
+  const createSimpleSignMessage = async (address: string) => {
+    const nonce = await fetchNonce();
+    const domain = window.location.host;
+
+    // 创建简单的、格式统一的消息
+    const message = `Sign this message to authenticate with ${domain}.\n\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${new Date().toISOString()}`;
+
+    console.log("创建的简单消息:", message);
+    return message;
   };
 
   // 登录方法
@@ -96,50 +88,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       setIsLoading(true);
-      const message = await createSiweMessage(address, "登录Web3应用程序");
+      // 使用自定义消息函数
+      const message = await createSimpleSignMessage(address);
 
-      console.log("SIWE消息:", message); // 打印消息
-
+      // 请求用户签名
       const signature = await signMessageAsync({ message });
-      console.log("签名:", signature); // 打印签名
+      console.log("获取的签名:", signature);
 
-      // 检查签名格式是否正确
-      if (!signature.startsWith("0x")) {
-        console.error("签名格式不正确，应以0x开头");
-        throw new Error("Invalid signature format");
-      }
+      // 确保地址格式统一
+      const normalizedAddress = address.toLowerCase();
+      console.log("规范化的地址:", normalizedAddress);
 
-      // 检查签名长度是否正确 (以太坊签名通常为130个字符，包括0x前缀)
-      if (signature.length !== 132) {
-        console.warn(`签名长度异常: ${signature.length} 字符 (预期为132字符)`);
-      }
-
-      console.log("签名:", signature);
-      console.log("签名长度:", signature.length);
-      console.log(
-        "签名以十六进制显示:",
-        Buffer.from(signature.slice(2), "hex")
-      );
-
-      // 创建一个干净的payload对象来发送到后端
-      const verifyPayload = {
-        message: message.trim(), // 确保没有额外的空格
-        signature: signature.trim(),
-        address: address.toLowerCase(), // 统一使用小写地址
+      // 创建请求体
+      const requestBody = {
+        message,
+        signature,
+        address: normalizedAddress,
       };
 
-      console.log("发送到后端的数据:", JSON.stringify(verifyPayload, null, 2));
-      // 向后端验证签名
+      console.log("发送到后端的数据:", JSON.stringify(requestBody, null, 2));
+
+      // 发送到后端验证
       const response = await axios.post(
-        "http://localhost:3001/auth/verify",
-        verifyPayload,
+        "http://localhost:3001/auth/simple-verify", // 使用新路由
+        requestBody,
         {
           headers: {
             "Content-Type": "application/json",
           },
         }
       );
-      console.log("验证成功，服务器响应:", response.data);
+
+      console.log("验证响应:", response.data);
 
       const { token } = response.data;
       localStorage.setItem("authToken", token);
@@ -148,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsAuthenticated(true);
       setUserData(jwtDecode(token) as DecodedToken);
     } catch (error: unknown) {
-      console.error("请求失败:", error);
+      console.error("登录失败", error);
       if (axios.isAxiosError(error) && error.response) {
         console.error("服务器返回错误:", {
           status: error.response.status,
