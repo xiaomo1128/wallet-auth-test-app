@@ -78,6 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       version: "1",
       chainId: 1, // 根据您的需求更改
       nonce: await fetchNonce(),
+      issuedAt: new Date().toISOString(),
     });
 
     return message.prepareMessage();
@@ -97,14 +98,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(true);
       const message = await createSiweMessage(address, "登录Web3应用程序");
 
-      const signature = await signMessageAsync({ message });
+      console.log("SIWE消息:", message); // 打印消息
 
+      const signature = await signMessageAsync({ message });
+      console.log("签名:", signature); // 打印签名
+
+      // 检查签名格式是否正确
+      if (!signature.startsWith("0x")) {
+        console.error("签名格式不正确，应以0x开头");
+        throw new Error("Invalid signature format");
+      }
+
+      // 检查签名长度是否正确 (以太坊签名通常为130个字符，包括0x前缀)
+      if (signature.length !== 132) {
+        console.warn(`签名长度异常: ${signature.length} 字符 (预期为132字符)`);
+      }
+
+      console.log("签名:", signature);
+      console.log("签名长度:", signature.length);
+      console.log(
+        "签名以十六进制显示:",
+        Buffer.from(signature.slice(2), "hex")
+      );
+
+      // 创建一个干净的payload对象来发送到后端
+      const verifyPayload = {
+        message: message.trim(), // 确保没有额外的空格
+        signature: signature.trim(),
+        address: address.toLowerCase(), // 统一使用小写地址
+      };
+
+      console.log("发送到后端的数据:", JSON.stringify(verifyPayload, null, 2));
       // 向后端验证签名
-      const response = await axios.post("http://localhost:3001/auth/verify", {
-        message,
-        signature,
-        address,
-      });
+      const response = await axios.post(
+        "http://localhost:3001/auth/verify",
+        verifyPayload,
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      console.log("验证成功，服务器响应:", response.data);
 
       const { token } = response.data;
       localStorage.setItem("authToken", token);
@@ -113,7 +148,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsAuthenticated(true);
       setUserData(jwtDecode(token) as DecodedToken);
     } catch (error: unknown) {
-      console.error("登录失败", error);
+      console.error("请求失败:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        console.error("服务器返回错误:", {
+          status: error.response.status,
+          data: error.response.data,
+        });
+      }
+      throw error; // 重新抛出以便外层catch处理
     } finally {
       setIsLoading(false);
     }
